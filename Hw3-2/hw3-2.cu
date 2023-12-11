@@ -11,6 +11,7 @@ int cpu_cnt;
 
 int* D;
 int V;
+int V_before_padding;
 int E;
 
 void input(const char* filename) {
@@ -18,6 +19,10 @@ void input(const char* filename) {
     FILE* file = fopen(filename, "rb");
 	fread(&V, sizeof(int), 1, file);
 	fread(&E, sizeof(int), 1, file);
+
+    V_before_padding = V;
+    int r = V % B;
+    V = V + B - r;
 
     // initialize matrix
     D = (int *)malloc(V * V * sizeof(int));
@@ -54,7 +59,10 @@ void input(const char* filename) {
 
 void output(const char* filename) {
     FILE* file = fopen(filename, "w");
-    fwrite(D, sizeof(int), V * V, file);
+    for (int i = 0; i < V_before_padding; ++i){
+        fwrite(&D[i * V], sizeof(int), V_before_padding, file);
+    }
+    // fwrite(D, sizeof(int), V_before_padding * V_before_padding, file);
 	fclose(file);
 }
 
@@ -141,7 +149,7 @@ __global__ void phase_2(int *d_D, int round, int V) {
         col_D[s_y * B + (s_x + half_B)] = min(col_D[s_y * B + (s_x + half_B)], pivot_D[s_y * B + k] + col_D[k * B + (s_x + half_B)]);
 		col_D[(s_y + half_B) * B + s_x] = min(col_D[(s_y + half_B) * B + s_x], pivot_D[(s_y + half_B) * B + k] + col_D[k * B + s_x]);
 		col_D[(s_y + half_B) * B + (s_x + half_B)] = min(col_D[(s_y + half_B) * B + (s_x + half_B)], pivot_D[(s_y + half_B) * B + k] + col_D[k * B + (s_x + half_B)]);
-        // no __syncthreads()?
+        __syncthreads();
     }
     // load col back to global
     d_D[g_y * V + g_x] = col_D[s_y * B + s_x];
@@ -159,6 +167,57 @@ __global__ void phase_2(int *d_D, int round, int V) {
     d_D[(g_y + half_B) * V + (g_x + half_B)] = row_D[(s_y + half_B) * B + (s_x + half_B)];
 }
 
+__global__ void phase_3(int *d_D, int round, int V) {
+    if (blockIdx.x == round || blockIdx.y == round) return;
+    // init share memory
+    __shared__ int row_D[B * B];
+    __shared__ int col_D[B * B];
+    // load row_D
+    const int s_x = threadIdx.x;
+    const int s_y = threadIdx.y;
+    int g_x = blockIdx.x * B + threadIdx.x; 
+    int g_y = round * B + threadIdx.y;
+
+    row_D[s_y * B + s_x] = d_D[g_y * V + g_x];
+    row_D[s_y * B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
+    row_D[(s_y + half_B) * B + s_x] = d_D[(g_y + half_B) * V + g_x];
+    row_D[(s_y + half_B) * B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
+
+    // load col_D
+    g_x = round * B + threadIdx.x; 
+    g_y = blockIdx.y * B + threadIdx.y;
+
+    col_D[s_y * B + s_x] = d_D[g_y * V + g_x];
+    col_D[s_y * B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
+    col_D[(s_y + half_B) * B + s_x] = d_D[(g_y + half_B) * V + g_x];
+    col_D[(s_y + half_B) * B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
+
+    __syncthreads();
+
+    // load base
+    g_x = blockIdx.x * B + threadIdx.x; 
+    g_y = blockIdx.y * B + threadIdx.y;
+
+    int base_0 = d_D[g_y * V + g_x];
+    int base_1 = d_D[g_y * V + (g_x + half_B)];
+    int base_2 = d_D[(g_y + half_B) * V + g_x];
+    int base_3 = d_D[(g_y + half_B) * V + (g_x + half_B)];
+
+    // calculate
+    #pragma unroll 32
+	for (int k = 0; k < B; ++k) {
+		base_0 = min(base_0, col_D[s_y * B + k] + row_D[k * B + s_x]);
+		base_1 = min(base_1, col_D[s_y * B + k] + row_D[k * B + (s_x + half_B)]);
+        base_2 = min(base_2, col_D[(s_y + half_B) * B + k] + row_D[k * B + s_x]);
+		base_3 = min(base_3, col_D[(s_y + half_B) * B + k] + row_D[k * B + (s_x + half_B)]);
+	}
+    
+    d_D[g_y * V + g_x] = base_0;
+    d_D[g_y * V + (g_x + half_B)] = base_1;
+    d_D[(g_y + half_B) * V + g_x] = base_2;
+    d_D[(g_y + half_B) * V + (g_x + half_B)] = base_3;
+}
+
 int main(int argc, char** argv) {
     // get input
     input(argv[1]);
@@ -167,22 +226,24 @@ int main(int argc, char** argv) {
     // printf("maxThreasPerBlock = %d, sharedMemPerBlock = %d", prop.maxThreadsPerBlock, prop.sharedMemPerBlock);
 
     int* d_D;
+    size_t total_size = V * V * sizeof(int);
     // pin host D, maybe cudaHostRegisterReadOnly?
-    cudaHostRegister(D, V * V * sizeof(int), cudaHostRegisterDefault);
-    cudaMalloc(&d_D, V * V * sizeof(int));
-    cudaMemcpy(d_D, D, V * V * sizeof(int), cudaMemcpyHostToDevice);
+    cudaHostRegister(D, total_size, cudaHostRegisterDefault);
+    cudaMalloc(&d_D, total_size);
+    cudaMemcpy(d_D, D, total_size, cudaMemcpyHostToDevice);
 
     // block
-    // B 32 or 64?
     int rounds = V / B;
+    dim3 phase_3_blocks(rounds, rounds);
     dim3 num_threads(32, 32); // maybe 64*16 is faster 
-    dim3 phase_2_blocks(rounds, 1);
     
     for (int i = 0; i < rounds; ++i) {
         phase_1<<<1, num_threads>>>(d_D, i, V);
-        phase_2<<<phase_2_blocks, num_threads>>>(d_D, i, V);
+        phase_2<<<rounds, num_threads>>>(d_D, i, V);
+        phase_3<<<phase_3_blocks, num_threads>>>(d_D, i, V);
     }
 
+    cudaMemcpy(D, d_D, total_size, cudaMemcpyDeviceToHost);
     // output
     output(argv[2]);
 }
