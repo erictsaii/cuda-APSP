@@ -144,12 +144,12 @@ __global__ void phase_2(int *d_D, int round, int V) {
         row_D[s_y * B + (s_x + half_B)] = min(row_D[s_y * B + (s_x + half_B)], pivot_D[s_y * B + k] + row_D[k * B + (s_x + half_B)]);
 		row_D[(s_y + half_B) * B + s_x] = min(row_D[(s_y + half_B) * B + s_x], pivot_D[(s_y + half_B) * B + k] + row_D[k * B + s_x]);
 		row_D[(s_y + half_B) * B + (s_x + half_B)] = min(row_D[(s_y + half_B) * B + (s_x + half_B)], pivot_D[(s_y + half_B) * B + k] + row_D[k * B + (s_x + half_B)]);
-        // col
-        col_D[s_y * B + s_x] = min(col_D[s_y * B + s_x], pivot_D[s_y * B + k] + col_D[k * B + s_x]);
-        col_D[s_y * B + (s_x + half_B)] = min(col_D[s_y * B + (s_x + half_B)], pivot_D[s_y * B + k] + col_D[k * B + (s_x + half_B)]);
-		col_D[(s_y + half_B) * B + s_x] = min(col_D[(s_y + half_B) * B + s_x], pivot_D[(s_y + half_B) * B + k] + col_D[k * B + s_x]);
-		col_D[(s_y + half_B) * B + (s_x + half_B)] = min(col_D[(s_y + half_B) * B + (s_x + half_B)], pivot_D[(s_y + half_B) * B + k] + col_D[k * B + (s_x + half_B)]);
-        __syncthreads();
+        // col        
+        col_D[s_y * B + s_x] = min(col_D[s_y * B + s_x], col_D[s_y * B + k] + pivot_D[k * B + s_x]);
+        col_D[s_y * B + (s_x + half_B)] = min(col_D[s_y * B + (s_x + half_B)], col_D[s_y * B + k] + pivot_D[k * B + (s_x + half_B)]);
+		col_D[(s_y + half_B) * B + s_x] = min(col_D[(s_y + half_B) * B + s_x], col_D[(s_y + half_B) * B + k] + pivot_D[k * B + s_x]);
+		col_D[(s_y + half_B) * B + (s_x + half_B)] = min(col_D[(s_y + half_B) * B + (s_x + half_B)], col_D[(s_y + half_B) * B + k] + pivot_D[k * B + (s_x + half_B)]);
+        //__syncthreads();
     }
     // load col back to global
     d_D[g_y * V + g_x] = col_D[s_y * B + s_x];
