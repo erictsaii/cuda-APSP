@@ -22,8 +22,7 @@ void input(const char* filename) {
 
     V_before_padding = V;
     int r = V % B;
-    V = V + B - r;
-
+    if (r != 0) V = V + B - r;
     // initialize matrix
     D = (int *)malloc(V * V * sizeof(int));
     for (int i = 0; i < V; ++i){
@@ -62,7 +61,6 @@ void output(const char* filename) {
     for (int i = 0; i < V_before_padding; ++i){
         fwrite(&D[i * V], sizeof(int), V_before_padding, file);
     }
-    // fwrite(D, sizeof(int), V_before_padding * V_before_padding, file);
 	fclose(file);
 }
 
@@ -83,7 +81,7 @@ __global__ void phase_1(int *d_D, int round, int V) {
 
     __syncthreads();
 
-    #pragma unroll 32 //necessary?
+    #pragma unroll 32
 	for (int k = 0; k < B; ++k) {
 		share_D[s_y * B + s_x] = min(share_D[s_y * B + s_x], share_D[s_y * B + k] + share_D[k * B + s_x]);
         share_D[s_y * B + (s_x + half_B)] = min(share_D[s_y * B + (s_x + half_B)], share_D[s_y * B + k] + share_D[k * B + (s_x + half_B)]);
@@ -149,7 +147,6 @@ __global__ void phase_2(int *d_D, int round, int V) {
         col_D[s_y * B + (s_x + half_B)] = min(col_D[s_y * B + (s_x + half_B)], col_D[s_y * B + k] + pivot_D[k * B + (s_x + half_B)]);
 		col_D[(s_y + half_B) * B + s_x] = min(col_D[(s_y + half_B) * B + s_x], col_D[(s_y + half_B) * B + k] + pivot_D[k * B + s_x]);
 		col_D[(s_y + half_B) * B + (s_x + half_B)] = min(col_D[(s_y + half_B) * B + (s_x + half_B)], col_D[(s_y + half_B) * B + k] + pivot_D[k * B + (s_x + half_B)]);
-        //__syncthreads();
     }
     // load col back to global
     d_D[g_y * V + g_x] = col_D[s_y * B + s_x];
@@ -175,24 +172,25 @@ __global__ void phase_3(int *d_D, int round, int V) {
     // load row_D
     const int s_x = threadIdx.x;
     const int s_y = threadIdx.y;
+    const int s_y_mul_B = s_y * B;
+    const int s_y_add_half_B_mul_B = (s_y + half_B) * B;
+
     int g_x = blockIdx.x * B + threadIdx.x; 
     int g_y = round * B + threadIdx.y;
 
-    row_D[s_y * B + s_x] = d_D[g_y * V + g_x];
-    row_D[s_y * B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
-    row_D[(s_y + half_B) * B + s_x] = d_D[(g_y + half_B) * V + g_x];
-    row_D[(s_y + half_B) * B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
+    row_D[s_y_mul_B + s_x] = d_D[g_y * V + g_x];
+    row_D[s_y_mul_B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
+    row_D[s_y_add_half_B_mul_B + s_x] = d_D[(g_y + half_B) * V + g_x];
+    row_D[s_y_add_half_B_mul_B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
 
     // load col_D
     g_x = round * B + threadIdx.x; 
     g_y = blockIdx.y * B + threadIdx.y;
 
-    col_D[s_y * B + s_x] = d_D[g_y * V + g_x];
-    col_D[s_y * B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
-    col_D[(s_y + half_B) * B + s_x] = d_D[(g_y + half_B) * V + g_x];
-    col_D[(s_y + half_B) * B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
-
-    __syncthreads();
+    col_D[s_y_mul_B + s_x] = d_D[g_y * V + g_x];
+    col_D[s_y_mul_B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
+    col_D[s_y_add_half_B_mul_B + s_x] = d_D[(g_y + half_B) * V + g_x];
+    col_D[s_y_add_half_B_mul_B + (s_x + half_B)] = d_D[(g_y + half_B) * V + (g_x + half_B)];
 
     // load base
     g_x = blockIdx.x * B + threadIdx.x; 
@@ -203,13 +201,15 @@ __global__ void phase_3(int *d_D, int round, int V) {
     int base_2 = d_D[(g_y + half_B) * V + g_x];
     int base_3 = d_D[(g_y + half_B) * V + (g_x + half_B)];
 
+     __syncthreads();
+
     // calculate
     #pragma unroll 32
 	for (int k = 0; k < B; ++k) {
-		base_0 = min(base_0, col_D[s_y * B + k] + row_D[k * B + s_x]);
-		base_1 = min(base_1, col_D[s_y * B + k] + row_D[k * B + (s_x + half_B)]);
-        base_2 = min(base_2, col_D[(s_y + half_B) * B + k] + row_D[k * B + s_x]);
-		base_3 = min(base_3, col_D[(s_y + half_B) * B + k] + row_D[k * B + (s_x + half_B)]);
+		base_0 = min(base_0, col_D[s_y_mul_B + k] + row_D[k * B + s_x]);
+		base_1 = min(base_1, col_D[s_y_mul_B + k] + row_D[k * B + (s_x + half_B)]);
+        base_2 = min(base_2, col_D[s_y_add_half_B_mul_B + k] + row_D[k * B + s_x]);
+		base_3 = min(base_3, col_D[s_y_add_half_B_mul_B + k] + row_D[k * B + (s_x + half_B)]);
 	}
     
     d_D[g_y * V + g_x] = base_0;
@@ -223,11 +223,11 @@ int main(int argc, char** argv) {
     input(argv[1]);
 
     // cudaGetDeviceProperties(&prop, DEV_NO);
-    // printf("maxThreasPerBlock = %d, sharedMemPerBlock = %d", prop.maxThreadsPerBlock, prop.sharedMemPerBlock);
+    // printf("maxThreadsPerBlock = %d, sharedMemPerBlock = %d", prop.maxThreadsPerBlock, prop.sharedMemPerBlock);
 
     int* d_D;
     size_t total_size = V * V * sizeof(int);
-    // pin host D, maybe cudaHostRegisterReadOnly?
+    // pin host D
     cudaHostRegister(D, total_size, cudaHostRegisterDefault);
     cudaMalloc(&d_D, total_size);
     cudaMemcpy(d_D, D, total_size, cudaMemcpyHostToDevice);
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
     // block
     int rounds = V / B;
     dim3 phase_3_blocks(rounds, rounds);
-    dim3 num_threads(32, 32); // maybe 64*16 is faster 
+    dim3 num_threads(32, 32);
     
     for (int i = 0; i < rounds; ++i) {
         phase_1<<<1, num_threads>>>(d_D, i, V);
