@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <cuda.h>
 #include <omp.h>
+#include <chrono>
 
 #define DEV_NO 0
 #define B 64
@@ -220,6 +221,7 @@ __global__ void phase_3(int *d_D, int round, int V, int y_offset) {
 }
 
 int main(int argc, char** argv) {
+    auto start = std::chrono::steady_clock::now();
     // get input
     input(argv[1]);
 
@@ -243,16 +245,25 @@ int main(int argc, char** argv) {
 
         int y_offset = (tid == 0) ? 0 : rounds / 2;
 
+        // load half of the data to device
         cudaMemcpy(d_D[tid] + y_offset * B * V, D + y_offset * B * V, phase_3_blocks.y * B * V * sizeof(int), cudaMemcpyHostToDevice);
 
         for (int i = 0; i < rounds; ++i) {
-            if (i >= y_offset && i < y_offset + phase_3_blocks.y) {
-				cudaMemcpy(D + i * B * V, d_D[tid] + i * B * V, B * V * sizeof(int), cudaMemcpyDeviceToHost);
-			}
+            if (tid == 0 && i < phase_3_blocks.y) {
+                cudaMemcpy(D + i * B * V, d_D[tid] + i * B * V, B * V * sizeof(int), cudaMemcpyDeviceToHost);
+            }
+            if (tid == 1 && i >= y_offset) {
+                cudaMemcpy(D + i * B * V, d_D[tid] + i * B * V, B * V * sizeof(int), cudaMemcpyDeviceToHost);
+            }
+            
             #pragma omp barrier
-            if (i < y_offset || i >= y_offset + phase_3_blocks.y) {
-				cudaMemcpy(d_D[tid] + i * B * V, D + i * B * V, B * V * sizeof(int), cudaMemcpyHostToDevice);
-			}
+            
+            if (tid == 0 && i >= phase_3_blocks.y) {
+                cudaMemcpy(d_D[tid] + i * B * V, D + i * B * V, B * V * sizeof(int), cudaMemcpyHostToDevice);
+            }
+            if (tid == 1 && i < y_offset) {
+                cudaMemcpy(d_D[tid] + i * B * V, D + i * B * V, B * V * sizeof(int), cudaMemcpyHostToDevice);
+            }
 
             phase_1<<<1, num_threads>>>(d_D[tid], i, V);
             phase_2<<<rounds, num_threads>>>(d_D[tid], i, V);
@@ -263,4 +274,7 @@ int main(int argc, char** argv) {
 
     // output
     output(argv[2]);
+    auto end = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    printf("total time %lld ms\n", duration.count());
 }

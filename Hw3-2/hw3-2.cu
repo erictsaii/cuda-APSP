@@ -136,7 +136,7 @@ __global__ void phase_2(int *d_D, int round, int V) {
 
     // calculate
     #pragma unroll 32
-    for (int k = 0; k < B; ++k){
+    for (int k = 0; k < B; ++k) {
         // row
         row_D[s_y * B + s_x] = min(row_D[s_y * B + s_x], pivot_D[s_y * B + k] + row_D[k * B + s_x]);
         row_D[s_y * B + (s_x + half_B)] = min(row_D[s_y * B + (s_x + half_B)], pivot_D[s_y * B + k] + row_D[k * B + (s_x + half_B)]);
@@ -174,10 +174,8 @@ __global__ void phase_3(int *d_D, int round, int V) {
     const int s_y = threadIdx.y;
     const int s_y_mul_B = s_y * B;
     const int s_y_add_half_B_mul_B = (s_y + half_B) * B;
-
     int g_x = blockIdx.x * B + threadIdx.x; 
     int g_y = round * B + threadIdx.y;
-
     row_D[s_y_mul_B + s_x] = d_D[g_y * V + g_x];
     row_D[s_y_mul_B + (s_x + half_B)] = d_D[g_y * V + (g_x + half_B)];
     row_D[s_y_add_half_B_mul_B + s_x] = d_D[(g_y + half_B) * V + g_x];
